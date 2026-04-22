@@ -2,8 +2,17 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { loadStripe } from '@stripe/stripe-js';
+import {
+  Elements,
+  PaymentElement,
+  useStripe,
+  useElements,
+} from '@stripe/react-stripe-js';
 import Nav from '../components/Nav';
 import Footer from '../components/Footer';
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!);
 
 const services = [
   'Swedish Relaxation — 60 min ($95)',
@@ -29,7 +38,7 @@ const timeSlots = [
   '5:00 PM', '5:30 PM', '6:00 PM', '6:30 PM',
 ];
 
-type Step = 1 | 2 | 3 | 4;
+type Step = 1 | 2 | 3 | 4 | 5;
 
 interface FormData {
   service: string;
@@ -45,14 +54,117 @@ interface FormData {
 }
 
 const addOnOptions = [
-  { id: 'scalp', label: 'Scalp & Face Massage (+$25)' },
-  { id: 'reflexology', label: 'Foot Reflexology (+$25)' },
-  { id: 'cbd', label: 'CBD Muscle Balm (+$20)' },
+  { id: 'scalp', label: 'Scalp & Face Massage (+$25)', price: 25 },
+  { id: 'reflexology', label: 'Foot Reflexology (+$25)', price: 25 },
+  { id: 'cbd', label: 'CBD Muscle Balm (+$20)', price: 20 },
 ];
 
+function parseServicePrice(service: string): number {
+  const match = service.match(/\(\$(\d+)\)/);
+  return match ? parseInt(match[1], 10) : 0;
+}
+
+const DEPOSIT = 25;
+
+function calcTotal(service: string, addOns: string[]): number {
+  const base = parseServicePrice(service);
+  const extras = addOns.reduce((sum, id) => {
+    const opt = addOnOptions.find((a) => a.id === id);
+    return sum + (opt?.price ?? 0);
+  }, 0);
+  return base + extras;
+}
+
+// ---------------------------------------------------------------------------
+// Payment form — lives inside <Elements> so it can use useStripe/useElements
+// ---------------------------------------------------------------------------
+function PaymentForm({
+  total,
+  onSuccess,
+}: {
+  total: number;
+  onSuccess: () => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [processing, setProcessing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handlePay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setProcessing(true);
+    setError('');
+
+    const { error: stripeError } = await stripe.confirmPayment({
+      elements,
+      confirmParams: { return_url: window.location.href },
+      redirect: 'if_required',
+    });
+
+    if (stripeError) {
+      setError(stripeError.message ?? 'Payment could not be processed. Please try again.');
+      setProcessing(false);
+    } else {
+      onSuccess();
+    }
+  };
+
+  return (
+    <form onSubmit={handlePay}>
+      <div style={{
+        background: 'white',
+        border: '1px solid var(--mist)',
+        padding: '2rem',
+        marginBottom: '1.5rem',
+      }}>
+        <PaymentElement
+          options={{
+            layout: 'tabs',
+            fields: { billingDetails: { name: 'auto', email: 'auto' } },
+          }}
+        />
+      </div>
+
+      {error && (
+        <div style={{
+          background: 'rgba(196,113,74,0.08)',
+          border: '1px solid var(--terracotta)',
+          padding: '0.875rem 1.25rem',
+          marginBottom: '1.5rem',
+          fontSize: '0.875rem',
+          color: 'var(--terracotta)',
+        }}>
+          {error}
+        </div>
+      )}
+
+      <p style={{ fontSize: '0.78rem', color: 'var(--ink)', opacity: 0.55, lineHeight: 1.7, marginBottom: '1.5rem' }}>
+        Your payment is processed securely by Stripe. We never store your card details.
+      </p>
+
+      <button
+        type="submit"
+        disabled={!stripe || processing}
+        className="btn-terracotta"
+        style={{ width: '100%', opacity: !stripe || processing ? 0.6 : 1, cursor: !stripe || processing ? 'not-allowed' : 'pointer' }}
+      >
+        {processing ? 'Processing…' : `Pay $${total}`}
+      </button>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
 export default function BookingPage() {
   const [step, setStep] = useState<Step>(1);
   const [submitted, setSubmitted] = useState(false);
+  const [clientSecret, setClientSecret] = useState('');
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentError, setPaymentError] = useState('');
+
   const [form, setForm] = useState<FormData>({
     service: '',
     date: '',
@@ -85,22 +197,40 @@ export default function BookingPage() {
     return true;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitted(true);
+  // Create PaymentIntent and advance to step 5
+  const handleProceedToPayment = async () => {
+    setPaymentLoading(true);
+    setPaymentError('');
+    try {
+      const res = await fetch('/api/create-payment-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ service: form.service, addOns: form.addOns }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error ?? 'Could not initialize payment.');
+      setClientSecret(data.clientSecret);
+      setStep(5);
+    } catch (err: unknown) {
+      setPaymentError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
+    } finally {
+      setPaymentLoading(false);
+    }
   };
 
   const steps = [
     { n: 1, label: 'Service' },
     { n: 2, label: 'Date & Time' },
     { n: 3, label: 'Your Details' },
-    { n: 4, label: 'Confirm' },
+    { n: 4, label: 'Review' },
+    { n: 5, label: 'Payment' },
   ];
 
-  // Get tomorrow's date as minimum
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const minDate = tomorrow.toISOString().split('T')[0];
+
+  const total = calcTotal(form.service, form.addOns);
 
   if (submitted) {
     return (
@@ -198,15 +328,16 @@ export default function BookingPage() {
                   }}>
                     {step > n ? '✓' : n}
                   </div>
-                  <span style={{
-                    fontSize: '0.72rem',
-                    fontWeight: 500,
-                    letterSpacing: '0.1em',
-                    textTransform: 'uppercase',
-                    color: step >= n ? 'var(--sage-dark)' : 'var(--ink)',
-                    opacity: step >= n ? 1 : 0.4,
-                    display: 'none',
-                  }}
+                  <span
+                    style={{
+                      fontSize: '0.72rem',
+                      fontWeight: 500,
+                      letterSpacing: '0.1em',
+                      textTransform: 'uppercase',
+                      color: step >= n ? 'var(--sage-dark)' : 'var(--ink)',
+                      opacity: step >= n ? 1 : 0.4,
+                      display: 'none',
+                    }}
                     className="step-label"
                   >
                     {label}
@@ -222,7 +353,7 @@ export default function BookingPage() {
 
         {/* Form */}
         <div style={{ maxWidth: '760px', margin: '0 auto', padding: '3rem 2rem 5rem' }}>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={(e) => e.preventDefault()}>
 
             {/* STEP 1: Service selection */}
             {step === 1 && (
@@ -421,10 +552,10 @@ export default function BookingPage() {
                   className="font-display"
                   style={{ fontSize: '2rem', fontWeight: 300, fontStyle: 'italic', color: 'var(--sage-dark)', marginBottom: '0.5rem' }}
                 >
-                  Review &amp; confirm
+                  Review your booking
                 </h2>
                 <p style={{ color: 'var(--ink)', opacity: 0.6, fontSize: '0.9rem', marginBottom: '2rem' }}>
-                  Please review your booking details before confirming.
+                  Confirm your details before proceeding to payment.
                 </p>
 
                 <div style={{
@@ -458,6 +589,26 @@ export default function BookingPage() {
                       <span style={{ fontSize: '0.9rem', color: 'var(--ink)', lineHeight: 1.5 }}>{value}</span>
                     </div>
                   ))}
+
+                  {/* Deposit / balance breakdown */}
+                  <div style={{ padding: '1rem 0 0', marginTop: '0.25rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--ink)', opacity: 0.65 }}>Service total</span>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>${total}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--ink)', opacity: 0.65 }}>Due at studio</span>
+                      <span style={{ fontSize: '0.9rem', color: 'var(--ink)' }}>${total - DEPOSIT}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid var(--mist)', paddingTop: '0.625rem', marginTop: '0.25rem' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--sage-dark)' }}>
+                        Deposit due now
+                      </span>
+                      <span style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--sage-dark)', fontFamily: 'var(--font-display)' }}>
+                        $25
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {form.healthNotes && (
@@ -468,17 +619,147 @@ export default function BookingPage() {
                 )}
 
                 <p style={{ fontSize: '0.8rem', color: 'var(--ink)', opacity: 0.6, lineHeight: 1.7, marginBottom: '2rem' }}>
-                  By confirming, you agree to our 24-hour cancellation policy. A confirmation email will be sent to {form.email}.
+                  A $25 deposit is required to confirm your appointment. The remaining balance is collected at the studio. By proceeding, you agree to our 24-hour cancellation policy.
                 </p>
+
+                {paymentError && (
+                  <div style={{
+                    background: 'rgba(196,113,74,0.08)',
+                    border: '1px solid var(--terracotta)',
+                    padding: '0.875rem 1.25rem',
+                    marginBottom: '1.5rem',
+                    fontSize: '0.875rem',
+                    color: 'var(--terracotta)',
+                  }}>
+                    {paymentError}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* STEP 5: Payment */}
+            {step === 5 && clientSecret && (
+              <div className="animate-fade-up">
+                <h2
+                  className="font-display"
+                  style={{ fontSize: '2rem', fontWeight: 300, fontStyle: 'italic', color: 'var(--sage-dark)', marginBottom: '0.5rem' }}
+                >
+                  Secure payment
+                </h2>
+                <p style={{ color: 'var(--ink)', opacity: 0.6, fontSize: '0.9rem', marginBottom: '2rem' }}>
+                  Enter your payment details below to confirm your appointment.
+                </p>
+
+                {/* Order summary pill */}
+                <div style={{
+                  background: 'rgba(45,74,62,0.05)',
+                  border: '1px solid var(--mist)',
+                  padding: '1rem 1.5rem',
+                  marginBottom: '1.75rem',
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', marginBottom: '0.875rem' }}>
+                    <div>
+                      <p style={{ fontSize: '0.8rem', color: 'var(--sage-dark)', fontWeight: 500, marginBottom: '0.2rem' }}>{form.service}</p>
+                      <p style={{ fontSize: '0.75rem', color: 'var(--ink)', opacity: 0.6 }}>
+                        {new Date(form.date + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at {form.time}
+                        {form.addOns.length > 0 && ` · ${form.addOns.length} add-on${form.addOns.length > 1 ? 's' : ''}`}
+                      </p>
+                    </div>
+                    <span style={{ fontSize: '0.85rem', color: 'var(--ink)', opacity: 0.6, flexShrink: 0 }}>Total ${total}</span>
+                  </div>
+                  <div style={{ borderTop: '1px solid var(--mist)', paddingTop: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <p style={{ fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--sage-dark)' }}>Deposit due now</p>
+                      <p style={{ fontSize: '0.72rem', color: 'var(--ink)', opacity: 0.55, marginTop: '0.2rem' }}>${total - DEPOSIT} remaining due at studio</p>
+                    </div>
+                    <span style={{ fontSize: '1.35rem', fontWeight: 600, color: 'var(--sage-dark)', fontFamily: 'var(--font-display)' }}>$25</span>
+                  </div>
+                </div>
+
+                <Elements
+                  stripe={stripePromise}
+                  options={{
+                    clientSecret,
+
+                    appearance: {
+                      theme: 'stripe',
+                      variables: {
+                        colorPrimary: '#2D4A3E',
+                        colorBackground: '#ffffff',
+                        colorText: '#1a1a1a',
+                        colorDanger: '#C4714A',
+                        fontFamily: 'DM Sans, system-ui, sans-serif',
+                        borderRadius: '0px',
+                        spacingUnit: '5px',
+                      },
+                      rules: {
+                        '.Input': { border: '1px solid #ddd6c8', boxShadow: 'none' },
+                        '.Input:focus': { border: '1px solid #2D4A3E', boxShadow: 'none', outline: '2px solid rgba(45,74,62,0.15)' },
+                        '.Label': { fontWeight: '500', letterSpacing: '0.1em', textTransform: 'uppercase', fontSize: '0.7rem' },
+                        '.Tab': { border: '1px solid #ddd6c8', boxShadow: 'none' },
+                        '.Tab--selected': { border: '1px solid #2D4A3E', boxShadow: 'none' },
+                      },
+                    },
+                  }}
+                >
+                  <PaymentForm total={DEPOSIT} onSuccess={() => setSubmitted(true)} />
+                </Elements>
               </div>
             )}
 
             {/* Navigation buttons */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
-              {step > 1 ? (
+            {step < 5 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem' }}>
+                {step > 1 ? (
+                  <button
+                    type="button"
+                    onClick={() => setStep((s) => (s - 1) as Step)}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontSize: '0.8rem',
+                      letterSpacing: '0.15em',
+                      textTransform: 'uppercase',
+                      color: 'var(--sage-dark)',
+                      fontFamily: 'var(--font-dm)',
+                      opacity: 0.7,
+                      padding: '0.5rem 0',
+                    }}
+                  >
+                    ← Back
+                  </button>
+                ) : <div />}
+
+                {step < 4 ? (
+                  <button
+                    type="button"
+                    onClick={() => { if (canProceed()) setStep((s) => (s + 1) as Step); }}
+                    className="btn-primary"
+                    style={{ opacity: canProceed() ? 1 : 0.45, cursor: canProceed() ? 'pointer' : 'not-allowed' }}
+                  >
+                    Continue →
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleProceedToPayment}
+                    disabled={paymentLoading}
+                    className="btn-terracotta"
+                    style={{ opacity: paymentLoading ? 0.6 : 1, cursor: paymentLoading ? 'not-allowed' : 'pointer' }}
+                  >
+                    {paymentLoading ? 'Preparing…' : `Proceed to Pay $25 Deposit`}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Back button on payment step */}
+            {step === 5 && (
+              <div style={{ marginTop: '1.5rem' }}>
                 <button
                   type="button"
-                  onClick={() => setStep((s) => (s - 1) as Step)}
+                  onClick={() => { setStep(4); setClientSecret(''); }}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -492,25 +773,11 @@ export default function BookingPage() {
                     padding: '0.5rem 0',
                   }}
                 >
-                  ← Back
+                  ← Back to review
                 </button>
-              ) : <div />}
+              </div>
+            )}
 
-              {step < 4 ? (
-                <button
-                  type="button"
-                  onClick={() => { if (canProceed()) setStep((s) => (s + 1) as Step); }}
-                  className="btn-primary"
-                  style={{ opacity: canProceed() ? 1 : 0.45, cursor: canProceed() ? 'pointer' : 'not-allowed' }}
-                >
-                  Continue →
-                </button>
-              ) : (
-                <button type="submit" className="btn-terracotta">
-                  Confirm Booking
-                </button>
-              )}
-            </div>
           </form>
         </div>
       </main>
