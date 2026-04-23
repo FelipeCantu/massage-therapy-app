@@ -132,22 +132,21 @@ function AdminContent() {
                     Connect your Stripe account
                   </h2>
                   <p style={{ color: 'var(--ink)', opacity: 0.65, fontSize: '0.9rem', lineHeight: 1.8, marginBottom: '2rem' }}>
-                    Clicking the button below will open Stripe&apos;s secure onboarding flow. You&apos;ll enter your banking details, verify your identity, and set up payouts — directly with Stripe. We never see or store your financial credentials.
+                    Clicking the button below will open Stripe&apos;s secure onboarding flow — directly with Stripe. We never see or store your financial credentials.
                   </p>
 
                   <div style={{
                     background: 'white',
                     border: '1px solid var(--mist)',
                     padding: '1.5rem',
-                    marginBottom: '2rem',
+                    marginBottom: '1rem',
                   }}>
                     <p style={{ fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--sage-dark)', marginBottom: '0.75rem' }}>
-                      What you&apos;ll need
+                      To get started you only need
                     </p>
                     {[
-                      'Business or personal bank account (for payouts)',
-                      'Government-issued ID or SSN for identity verification',
-                      'Business address and phone number',
+                      'An email address',
+                      'Your name and basic business info',
                     ].map((item) => (
                       <div key={item} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', marginBottom: '0.5rem' }}>
                         <span style={{ color: 'var(--sage)', marginTop: '3px', flexShrink: 0 }}>—</span>
@@ -155,6 +154,10 @@ function AdminContent() {
                       </div>
                     ))}
                   </div>
+
+                  <p style={{ fontSize: '0.8rem', color: 'var(--ink)', opacity: 0.5, lineHeight: 1.7, marginBottom: '2rem' }}>
+                    Stripe may ask for additional details like a bank account or ID verification later as your payment volume grows — but you don&apos;t need any of that to get connected today.
+                  </p>
 
                   {error && (
                     <div style={{
