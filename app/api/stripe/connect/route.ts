@@ -17,8 +17,8 @@ export async function POST() {
   // Generate a one-time onboarding link
   const accountLink = await stripe.accountLinks.create({
     account: account.id,
-    refresh_url: `${appUrl}/admin?refresh=true`,
-    return_url: `${appUrl}/admin?connected=${account.id}`,
+    refresh_url: `${appUrl}/angelface?refresh=true`,
+    return_url: `${appUrl}/angelface?connected=${account.id}`,
     type: 'account_onboarding',
   });
 

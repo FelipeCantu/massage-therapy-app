@@ -6,9 +6,8 @@ import { useState, useEffect } from 'react';
 
 const links = [
   { href: '/', label: 'Home' },
-  { href: '/about', label: 'About' },
-  { href: '/services', label: 'Services' },
-  { href: '/contact', label: 'Contact' },
+  { href: '#services', label: 'Services' },
+  { href: '#contact', label: 'Contact' },
 ];
 
 export default function Nav() {
@@ -26,7 +25,6 @@ export default function Nav() {
     setOpen(false);
   }, [pathname]);
 
-  // Lock body scroll when mobile menu is open
   useEffect(() => {
     document.body.style.overflow = open ? 'hidden' : '';
     return () => { document.body.style.overflow = ''; };
@@ -44,9 +42,7 @@ export default function Nav() {
           right: 0,
           zIndex: 100,
           transition: 'background 0.4s ease, box-shadow 0.4s ease',
-          background: scrolled || !isHome
-            ? 'rgba(247,239,224,0.96)'
-            : 'transparent',
+          background: scrolled || !isHome ? 'rgba(247,239,224,0.96)' : 'transparent',
           backdropFilter: scrolled || !isHome ? 'blur(8px)' : 'none',
           boxShadow: scrolled || !isHome ? '0 1px 0 rgba(28,28,25,0.08)' : 'none',
         }}
@@ -101,40 +97,36 @@ export default function Nav() {
 
           {/* Desktop links */}
           <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '2.5rem',
-            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '2.5rem' }}
             className="hidden-mobile"
           >
-            {links.map(({ href, label }) => (
-              <Link
-                key={href}
-                href={href}
-                style={{
-                  textDecoration: 'none',
-                  fontSize: '0.72rem',
-                  fontWeight: 500,
-                  letterSpacing: '0.18em',
-                  textTransform: 'uppercase',
-                  color: scrolled || !isHome ? 'var(--ink)' : 'var(--cream)',
-                  opacity: pathname === href ? 1 : 0.75,
-                  borderBottom: pathname === href ? '1px solid var(--terracotta)' : '1px solid transparent',
-                  paddingBottom: '2px',
-                  transition: 'color 0.3s ease, opacity 0.3s ease, border-color 0.3s ease',
-                }}
-              >
-                {label}
-              </Link>
-            ))}
+            {links.map(({ href, label }) => {
+              const isActive = href === '/' ? pathname === '/' : false;
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  style={{
+                    textDecoration: 'none',
+                    fontSize: '0.72rem',
+                    fontWeight: 500,
+                    letterSpacing: '0.18em',
+                    textTransform: 'uppercase',
+                    color: scrolled || !isHome ? 'var(--ink)' : 'var(--cream)',
+                    opacity: isActive ? 1 : 0.75,
+                    borderBottom: isActive ? '1px solid var(--terracotta)' : '1px solid transparent',
+                    paddingBottom: '2px',
+                    transition: 'color 0.3s ease, opacity 0.3s ease, border-color 0.3s ease',
+                  }}
+                >
+                  {label}
+                </Link>
+              );
+            })}
             <Link
               href="/booking"
               className="btn-primary"
-              style={{
-                padding: '0.6rem 1.5rem',
-                fontSize: '0.7rem',
-              }}
+              style={{ padding: '0.6rem 1.5rem', fontSize: '0.7rem' }}
             >
               Book Now
             </Link>
@@ -199,6 +191,7 @@ export default function Nav() {
           <Link
             key={href}
             href={href}
+            onClick={() => setOpen(false)}
             style={{
               textDecoration: 'none',
               color: 'var(--cream)',
@@ -228,7 +221,7 @@ export default function Nav() {
             padding: '0.875rem 2rem',
             opacity: open ? 1 : 0,
             transform: open ? 'translateY(0)' : 'translateY(16px)',
-            transition: `opacity 0.5s ease 0.45s, transform 0.5s ease 0.45s`,
+            transition: `opacity 0.5s ease 0.35s, transform 0.5s ease 0.35s`,
           }}
         >
           Book a Session
