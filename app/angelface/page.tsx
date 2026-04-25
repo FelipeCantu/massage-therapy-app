@@ -375,60 +375,123 @@ const iconBtn: React.CSSProperties = {
 
 
 // ---------------------------------------------------------------------------
-// Stripe Setup
+// Payment Portal
 // ---------------------------------------------------------------------------
-function StripeSetup() {
-  const [justConnected, setJustConnected] = useState<string | null>(null);
-  const [needsRefresh, setNeedsRefresh] = useState(false);
+const fmt = (n: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n ?? 0);
 
-  const [status, setStatus] = useState<AccountStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [connecting, setConnecting] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState('');
+const fmtDate = (unix: number) =>
+  new Date(unix * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+function PaymentPortal({ adminKey }: { adminKey: string }) {
+  const [balance, setBalance]   = useState<{ available: number; pending: number } | null>(null);
+  const [payments, setPayments] = useState<any[]>([]);
+  const [payouts, setPayouts]   = useState<any[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [tab, setTab]           = useState<'payments' | 'payouts'>('payments');
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const connected = params.get('connected');
-    const refresh = params.has('refresh');
-    setJustConnected(connected);
-    setNeedsRefresh(refresh);
+    const headers = { 'x-admin-key': adminKey };
+    Promise.all([
+      fetch('/api/stripe/portal/balance',  { headers }).then(r => r.json()),
+      fetch('/api/stripe/portal/payments', { headers }).then(r => r.json()),
+      fetch('/api/stripe/portal/payouts',  { headers }).then(r => r.json()),
+    ]).then(([bal, pay, po]) => {
+      setBalance(bal);
+      setPayments(pay.payments || []);
+      setPayouts(po.payouts   || []);
+    }).finally(() => setLoading(false));
+  }, [adminKey]);
 
-    const url = connected
-      ? `/api/stripe/connect/status?accountId=${connected}`
-      : '/api/stripe/connect/status';
+  if (loading) return <p style={{ color: 'var(--ink)', opacity: 0.5, fontSize: '0.9rem' }}>Loading payment data…</p>;
 
-    fetch(url)
-      .then((r) => r.json())
-      .then((data) => setStatus(data))
-      .catch(() => setStatus({ connected: false }))
-      .finally(() => setLoading(false));
-  }, []);
+  const statusColor = (s: string) => s === 'succeeded' || s === 'paid' ? 'var(--sage-dark)' : s === 'pending' ? '#b45309' : 'var(--terracotta)';
 
-  const handleConnect = async () => {
-    setConnecting(true);
-    setError('');
-    try {
-      const res = await fetch('/api/stripe/connect', { method: 'POST' });
-      const data = await res.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        throw new Error(data.error ?? 'Could not start onboarding.');
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Something went wrong.');
-      setConnecting(false);
-    }
-  };
+  return (
+    <div>
+      {/* Balance cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1px', background: 'var(--mist)', marginBottom: '2.5rem' }}>
+        {[
+          { label: 'Available Balance', value: fmt(balance?.available ?? 0), sub: 'Ready to payout' },
+          { label: 'Pending',           value: fmt(balance?.pending ?? 0),   sub: 'In transit' },
+          { label: 'Total Bookings',    value: payments.length.toString(),   sub: 'Recent payments' },
+        ].map(({ label, value, sub }) => (
+          <div key={label} style={{ background: 'white', padding: '1.5rem' }}>
+            <p style={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--sage)', margin: '0 0 0.5rem' }}>{label}</p>
+            <p className="font-display" style={{ fontSize: '1.75rem', fontWeight: 400, color: 'var(--sage-dark)', margin: '0 0 0.2rem' }}>{value}</p>
+            <p style={{ fontSize: '0.72rem', color: 'var(--terracotta)', margin: 0 }}>{sub}</p>
+          </div>
+        ))}
+      </div>
 
-  const copyAccountId = async (id: string) => {
-    await navigator.clipboard.writeText(id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+      {/* Sub-tabs */}
+      <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--mist)', marginBottom: '1.5rem' }}>
+        {(['payments', 'payouts'] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            background: 'none', border: 'none',
+            borderBottom: tab === t ? '2px solid var(--sage-dark)' : '2px solid transparent',
+            padding: '0.75rem 1.25rem', marginBottom: '-1px',
+            fontSize: '0.72rem', fontWeight: 600, letterSpacing: '0.12em', textTransform: 'uppercase',
+            color: tab === t ? 'var(--sage-dark)' : 'var(--ink)', opacity: tab === t ? 1 : 0.45,
+            cursor: 'pointer', fontFamily: 'var(--font-dm)', transition: 'all 0.2s ease',
+          }}>
+            {t === 'payments' ? `Bookings (${payments.length})` : `Payouts (${payouts.length})`}
+          </button>
+        ))}
+      </div>
 
-  if (loading) return <p style={{ color: 'var(--ink)', opacity: 0.5, fontSize: '0.9rem' }}>Checking connection status…</p>;
+      {/* Payments list */}
+      {tab === 'payments' && (
+        payments.length === 0
+          ? <p style={{ color: 'var(--ink)', opacity: 0.4, fontSize: '0.9rem' }}>No payments yet.</p>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', background: 'var(--mist)' }}>
+              {payments.map((p) => (
+                <div key={p.id} style={{ background: 'white', padding: '1.25rem 1.5rem', display: 'grid', gridTemplateColumns: '1fr auto', gap: '1rem', alignItems: 'start' }}>
+                  <div>
+                    <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--sage-dark)', margin: '0 0 0.2rem' }}>
+                      {p.service || 'Booking deposit'}
+                    </p>
+                    {p.addOns && <p style={{ fontSize: '0.72rem', color: 'var(--ink)', opacity: 0.5, margin: '0 0 0.35rem' }}>Add-ons: {p.addOns}</p>}
+                    <p style={{ fontSize: '0.72rem', color: 'var(--ink)', opacity: 0.4, margin: 0 }}>{fmtDate(p.created)}</p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--sage-dark)', margin: '0 0 0.25rem' }}>{fmt(p.amount)}</p>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: statusColor(p.status) }}>{p.status}</span>
+                    {p.totalAmount && (
+                      <p style={{ fontSize: '0.68rem', color: 'var(--ink)', opacity: 0.4, margin: '0.25rem 0 0' }}>Total: {fmt(Number(p.totalAmount))}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+      )}
+
+      {/* Payouts list */}
+      {tab === 'payouts' && (
+        payouts.length === 0
+          ? <p style={{ color: 'var(--ink)', opacity: 0.4, fontSize: '0.9rem' }}>No payouts yet.</p>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', background: 'var(--mist)' }}>
+              {payouts.map((p) => (
+                <div key={p.id} style={{ background: 'white', padding: '1.25rem 1.5rem', display: 'grid', gridTemplateColumns: '1fr auto', gap: '1rem', alignItems: 'center' }}>
+                  <div>
+                    <p style={{ fontSize: '0.875rem', fontWeight: 500, color: 'var(--sage-dark)', margin: '0 0 0.2rem' }}>
+                      {p.description || 'Payout to bank'}
+                    </p>
+                    <p style={{ fontSize: '0.72rem', color: 'var(--ink)', opacity: 0.4, margin: 0 }}>
+                      Initiated {fmtDate(p.created)} · Arrives {fmtDate(p.arrivalDate)}
+                    </p>
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--sage-dark)', margin: '0 0 0.25rem' }}>{fmt(p.amount)}</p>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: statusColor(p.status) }}>{p.status}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+      )}
+    </div>
+  );
+}
 
   return (
     <>
@@ -554,32 +617,39 @@ function StripeSetup() {
 // ---------------------------------------------------------------------------
 // Password gate
 // ---------------------------------------------------------------------------
-const ADMIN_PASSWORD = 'Angelface1975!!';
-const SESSION_KEY = 'af_admin_auth';
+const SESSION_KEY = 'af_admin_key';
 
-function PasswordGate({ children }: { children: React.ReactNode }) {
-  const [unlocked, setUnlocked] = useState(false);
-  const [input, setInput] = useState('');
-  const [error, setError] = useState(false);
-  const [show, setShow] = useState(false);
+function PasswordGate({ children }: { children: (adminKey: string) => React.ReactNode }) {
+  const [adminKey, setAdminKey] = useState(() => sessionStorage.getItem(SESSION_KEY) || '');
+  const [input, setInput]       = useState('');
+  const [error, setError]       = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [show, setShow]         = useState(false);
 
-  useEffect(() => {
-    if (sessionStorage.getItem(SESSION_KEY) === '1') setUnlocked(true);
-  }, []);
-
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (input === ADMIN_PASSWORD) {
-      sessionStorage.setItem(SESSION_KEY, '1');
-      setUnlocked(true);
-    } else {
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await fetch('/api/stripe/portal/balance', {
+        headers: { 'x-admin-key': input },
+      });
+      if (res.ok) {
+        sessionStorage.setItem(SESSION_KEY, input);
+        setAdminKey(input);
+      } else {
+        setError(true);
+        setInput('');
+        setTimeout(() => setError(false), 2500);
+      }
+    } catch {
       setError(true);
-      setInput('');
-      setTimeout(() => setError(false), 2500);
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (unlocked) return <>{children}</>;
+  if (adminKey) return <>{children(adminKey)}</>;
 
   return (
     <div style={{
@@ -692,8 +762,8 @@ function PasswordGate({ children }: { children: React.ReactNode }) {
             </p>
           )}
 
-          <button type="submit" className="btn-primary" style={{ width: '100%' }}>
-            Enter
+          <button type="submit" className="btn-primary" style={{ width: '100%' }} disabled={loading}>
+            {loading ? 'Verifying…' : 'Enter'}
           </button>
         </form>
       </div>
@@ -704,9 +774,9 @@ function PasswordGate({ children }: { children: React.ReactNode }) {
 // ---------------------------------------------------------------------------
 // Main admin page
 // ---------------------------------------------------------------------------
-type Tab = 'services' | 'stripe';
+type Tab = 'services' | 'payments';
 
-function AdminContent() {
+function AdminContent({ adminKey }: { adminKey: string }) {
   const [tab, setTab] = useState<Tab>('services');
 
   return (
@@ -727,7 +797,7 @@ function AdminContent() {
         {/* Tabs */}
         <div style={{ borderBottom: '1px solid var(--mist)', background: 'white' }}>
           <div style={{ maxWidth: '760px', margin: '0 auto', padding: '0 2rem', display: 'flex', gap: '0' }}>
-            {([['services', 'Services'], ['stripe', 'Payment Setup']] as [Tab, string][]).map(([t, label]) => (
+            {([['services', 'Services'], ['payments', 'Payments']] as [Tab, string][]).map(([t, label]) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -757,7 +827,7 @@ function AdminContent() {
         {/* Tab content */}
         <div style={{ maxWidth: '760px', margin: '0 auto', padding: '3rem 2rem 6rem' }}>
           {tab === 'services' && <ServicesEditor />}
-          {tab === 'stripe' && <StripeSetup />}
+          {tab === 'payments' && <PaymentPortal adminKey={adminKey} />}
 
           <div style={{ marginTop: '4rem', paddingTop: '2rem', borderTop: '1px solid var(--mist)' }}>
             <Link href="/" style={{ fontSize: '0.8rem', letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--sage-dark)', opacity: 0.6, textDecoration: 'none' }}>
@@ -780,7 +850,7 @@ function AdminContent() {
 export default function AdminPage() {
   return (
     <PasswordGate>
-      <AdminContent />
+      {(adminKey) => <AdminContent adminKey={adminKey} />}
     </PasswordGate>
   );
 }
